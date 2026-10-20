@@ -3,6 +3,7 @@ import { supabase } from './supabaseClient';
 import WeeklyCalendar from './components/WeeklyCalendar';
 import StudioSettings from './components/StudioSettings';
 import MemberDetailDrawer from './components/MemberDetailDrawer';
+import BulkImportModal from './components/BulkImportModal';
 
 const glassStyle = "bg-white/25 backdrop-blur-xl border border-white/40 shadow-sm rounded-3xl";
 const QR_PREFIX  = 'STUDIOM-';
@@ -141,6 +142,9 @@ export default function App() {
   const [editForm,         setEditForm]         = useState({});
   const [editFormError,    setEditFormError]    = useState('');
   const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+
+  // Bulk import
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   // Add member modal
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
@@ -842,6 +846,9 @@ export default function App() {
                   className="w-full bg-white/50 border border-black/10 rounded-xl pl-10 pr-4 py-3 text-sm font-medium placeholder:text-black/30 outline-none focus:border-black/30 transition"
                 />
               </div>
+              <button onClick={() => setShowBulkImport(true)} className="flex items-center gap-2 text-black/60 px-5 py-3 rounded-xl font-semibold text-sm bg-white/40 border border-black/10 hover:bg-white/60 transition whitespace-nowrap">
+                ⬆ Toplu İçe Aktar
+              </button>
               <button onClick={openAddMemberModal} style={{ backgroundColor: themeColor }} className="flex items-center gap-2 text-white px-5 py-3 rounded-xl font-semibold text-sm hover:opacity-90 transition shadow-sm whitespace-nowrap">
                 <span>+</span> Üye Ekle
               </button>
@@ -1355,6 +1362,16 @@ export default function App() {
           onClose={() => setMemberDetail(null)}
           onEdit={(m) => { setMemberDetail(null); openEditModal(m); }}
           showToast={showToast}
+        />
+      )}
+
+      {showBulkImport && (
+        <BulkImportModal
+          studioId={studioId}
+          membershipTypes={membershipTypes}
+          themeColor={themeColor}
+          onClose={() => setShowBulkImport(false)}
+          onImportComplete={() => { fetchMembers(); fetchTotalMembers(); fetchExpiringMembers(); }}
         />
       )}
 
