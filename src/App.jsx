@@ -5,6 +5,7 @@ import StudioSettings from './components/StudioSettings';
 import MemberDetailDrawer from './components/MemberDetailDrawer';
 import BulkImportModal from './components/BulkImportModal';
 import InstructorsTab from './components/InstructorsTab';
+import InstructorSelect from './components/InstructorSelect';
 
 const glassStyle = "bg-white/25 backdrop-blur-xl border border-white/40 shadow-sm rounded-3xl";
 const QR_PREFIX  = 'STUDIOM-';
@@ -182,6 +183,14 @@ export default function App() {
   const [formData,     setFormData]     = useState(EMPTY_FORM);
   const [formError,    setFormError]    = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit class modal
+  const [editingClass,          setEditingClass]          = useState(null);
+  const [classEditForm,         setClassEditForm]         = useState({});
+  const [classEditError,        setClassEditError]        = useState('');
+  const [classEditSubmitting,   setClassEditSubmitting]   = useState(false);
+  const [classEditImageFile,    setClassEditImageFile]    = useState(null);
+  const [classEditImagePreview, setClassEditImagePreview] = useState(null);
 
   // Member detail drawer
   const [memberDetail, setMemberDetail] = useState(null);
@@ -462,6 +471,9 @@ export default function App() {
     if (new Date(formData.endTime) <= new Date(formData.startTime)) {
       setFormError('Bitiş saati başlangıçtan sonra olmalı.'); return;
     }
+    if (instructors.length > 0 && !formData.instructorId) {
+      setFormError('Lütfen bir eğitmen seçin.'); return;
+    }
     if (formData.isRecurring) {
       if (!formData.selectedDays.length) { setFormError('En az bir gün seçin.'); return; }
       if (!formData.endDate) { setFormError('Bitiş tarihini girin.'); return; }
@@ -482,13 +494,12 @@ export default function App() {
       }
     } else {
       const { data: inserted, error } = await supabase.from('classes').insert({
-        studio_id:       studioId,
-        title:           formData.title.trim(),
-        instructor_name: formData.instructorName.trim() || null,
-        instructor_id:   formData.instructorId           || null,
-        start_time:      formData.startTime,
-        end_time:        formData.endTime,
-        max_capacity:    Number(formData.maxCapacity),
+        studio_id:        studioId,
+        title:            formData.title.trim(),
+        instructor_id:    formData.instructorId || null,
+        start_time:       formData.startTime,
+        end_time:         formData.endTime,
+        max_capacity:     Number(formData.maxCapacity),
         current_capacity: 0,
       }).select('id').single();
       if (error) { setFormError(error.message); setIsSubmitting(false); return; }
@@ -499,6 +510,80 @@ export default function App() {
     }
     setIsSubmitting(false);
     closeModal(); fetchClasses();
+  }
+
+  // ── Edit Class ───────────────────────────────────────────
+  function openEditClass(cls) {
+    setEditingClass(cls);
+    setClassEditForm({
+      title:        cls.title,
+      instructorId: cls.instructor_id || '',
+      startTime:    cls.start_time ? cls.start_time.slice(0, 16) : '',
+      endTime:      cls.end_time   ? cls.end_time.slice(0, 16)   : '',
+      maxCapacity:  cls.max_capacity,
+    });
+    setClassEditError('');
+    setClassEditImageFile(null);
+    setClassEditImagePreview(cls.image_url || null);
+  }
+
+  function closeEditClass() {
+    setEditingClass(null);
+    setClassEditImageFile(null);
+    setClassEditImagePreview(null);
+    setClassEditError('');
+  }
+
+  async function handleClassEditImageSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg','image/png','image/webp'].includes(file.type)) {
+      setClassEditError('Yalnızca JPG, PNG veya WEBP desteklenir.'); return;
+    }
+    if (file.size > 5 * 1024 * 1024) { setClassEditError('Görsel 5 MB limitini aşıyor.'); return; }
+    setClassEditError('');
+    setClassEditImageFile(file);
+    setClassEditImagePreview(URL.createObjectURL(file));
+    e.target.value = '';
+  }
+
+  async function handleUpdateClass(e) {
+    e.preventDefault();
+    if (!classEditForm.title.trim() || !classEditForm.startTime || !classEditForm.endTime) {
+      setClassEditError('Lütfen zorunlu alanları doldurun.'); return;
+    }
+    if (new Date(classEditForm.endTime) <= new Date(classEditForm.startTime)) {
+      setClassEditError('Bitiş saati başlangıçtan sonra olmalı.'); return;
+    }
+    if (instructors.length > 0 && !classEditForm.instructorId) {
+      setClassEditError('Lütfen bir eğitmen seçin.'); return;
+    }
+    setClassEditSubmitting(true); setClassEditError('');
+
+    let imageUrl = editingClass.image_url || null;
+    if (classEditImageFile) {
+      const ext  = classEditImageFile.name.split('.').pop().toLowerCase();
+      const path = `classes/${studioId}/${editingClass.id}/cover_${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('studio-assets').upload(path, classEditImageFile, { upsert: true });
+      if (!upErr) {
+        const { data: { publicUrl } } = supabase.storage.from('studio-assets').getPublicUrl(path);
+        imageUrl = publicUrl;
+      }
+    }
+
+    const { error } = await supabase.from('classes').update({
+      title:        classEditForm.title.trim(),
+      instructor_id: classEditForm.instructorId || null,
+      start_time:   classEditForm.startTime,
+      end_time:     classEditForm.endTime,
+      max_capacity: Number(classEditForm.maxCapacity),
+      image_url:    imageUrl,
+    }).eq('id', editingClass.id);
+
+    setClassEditSubmitting(false);
+    if (error) { setClassEditError(error.message); return; }
+    closeEditClass(); fetchClasses();
+    showToast(true, 'Ders güncellendi.');
   }
 
   // ── Packages ────────────────────────────────────────────
@@ -812,9 +897,14 @@ export default function App() {
                             </span>
                           </td>
                           <td className="py-3.5">
-                            <button onClick={() => openAttendance(cls)} style={{ backgroundColor: themeColor }} className="px-3 py-1.5 rounded-xl text-white text-xs font-semibold hover:opacity-80 transition">
-                              Yoklama
-                            </button>
+                            <div className="flex gap-1.5">
+                              <button onClick={() => openAttendance(cls)} style={{ backgroundColor: themeColor }} className="px-3 py-1.5 rounded-xl text-white text-xs font-semibold hover:opacity-80 transition">
+                                Yoklama
+                              </button>
+                              <button onClick={() => openEditClass(cls)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/60 border border-black/10 hover:bg-white/80 transition">
+                                Düzenle
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -889,6 +979,7 @@ export default function App() {
             themeColor={themeColor}
             onAddClass={openModal}
             onAttendance={openAttendance}
+            onEditClass={openEditClass}
           />
         )}
 
@@ -1114,21 +1205,16 @@ export default function App() {
                 <input type="text" name="title" value={formData.title} onChange={handleFormChange} placeholder="Reformer Pilates" className={inputClass} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-semibold text-black/50">Eğitmen</label>
-                {instructors.length > 0 ? (
-                  <select name="instructorId" value={formData.instructorId} onChange={handleFormChange} className={inputClass}>
-                    <option value="">— Eğitmen seçin (opsiyonel) —</option>
-                    {instructors.map(i => <option key={i.id} value={i.id}>{i.full_name}</option>)}
-                  </select>
-                ) : (
-                  <input type="text" name="instructorName" value={formData.instructorName} onChange={handleFormChange} placeholder="Selay Yılmaz" className={inputClass} />
-                )}
-                {instructors.length > 0 && (
-                  <button type="button" onClick={() => setActiveTab('instructors')}
-                    style={{ color: themeColor }} className="text-xs font-semibold text-left hover:opacity-70 transition">
-                    + Eğitmenler sayfasından yeni eğitmen ekle
-                  </button>
-                )}
+                <label className="text-sm font-semibold text-black/50">
+                  Eğitmen{instructors.length > 0 ? ' *' : ''}
+                </label>
+                <InstructorSelect
+                  instructors={instructors}
+                  value={formData.instructorId}
+                  onChange={id => setFormData(f => ({ ...f, instructorId: id }))}
+                  themeColor={themeColor}
+                  onAddInstructor={() => { closeModal(); setActiveTab('instructors'); }}
+                />
               </div>
 
               {/* Ders Görseli */}
@@ -1203,6 +1289,98 @@ export default function App() {
                 <button type="button" onClick={closeModal} className="flex-1 py-3 rounded-xl border border-black/10 bg-black/5 hover:bg-black/10 font-semibold text-sm transition">İptal</button>
                 <button type="submit" disabled={isSubmitting} style={{ backgroundColor: themeColor }} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 disabled:opacity-60 transition">
                   {isSubmitting ? 'Kaydediliyor...' : 'Ders Oluştur'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DERS DÜZENLE */}
+      {editingClass && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-md p-4" onClick={closeEditClass}>
+          <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white/85 backdrop-blur-xl border border-white/60 rounded-3xl shadow-2xl p-8" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-7">
+              <h3 className="text-xl font-bold">Ders Düzenle</h3>
+              <button onClick={closeEditClass} className="w-8 h-8 flex items-center justify-center rounded-full bg-black/5 hover:bg-black/10 text-black/50 font-bold transition">✕</button>
+            </div>
+            <form onSubmit={handleUpdateClass} className="flex flex-col gap-5">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-semibold text-black/50">Ders Adı *</label>
+                <input type="text" value={classEditForm.title ?? ''}
+                  onChange={e => setClassEditForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="Reformer Pilates" className={inputClass} />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-semibold text-black/50">
+                  Eğitmen{instructors.length > 0 ? ' *' : ''}
+                </label>
+                <InstructorSelect
+                  instructors={instructors}
+                  value={classEditForm.instructorId ?? ''}
+                  onChange={id => setClassEditForm(f => ({ ...f, instructorId: id }))}
+                  themeColor={themeColor}
+                  onAddInstructor={() => { closeEditClass(); setActiveTab('instructors'); }}
+                />
+                {/* Legacy fallback: show old instructor_name if no instructor_id was set */}
+                {!classEditForm.instructorId && editingClass.instructor_name && (
+                  <p className="text-xs text-black/40">Mevcut kayıt: {editingClass.instructor_name}</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-semibold text-black/50">Başlangıç Saati *</label>
+                  <input type="datetime-local" value={classEditForm.startTime ?? ''}
+                    onChange={e => setClassEditForm(f => ({ ...f, startTime: e.target.value }))}
+                    className={inputClass} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-semibold text-black/50">Bitiş Saati *</label>
+                  <input type="datetime-local" value={classEditForm.endTime ?? ''}
+                    onChange={e => setClassEditForm(f => ({ ...f, endTime: e.target.value }))}
+                    className={inputClass} />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-semibold text-black/50">Maks. Kapasite</label>
+                <input type="number" value={classEditForm.maxCapacity ?? 15} min="1"
+                  onChange={e => setClassEditForm(f => ({ ...f, maxCapacity: e.target.value }))}
+                  className={inputClass} />
+              </div>
+
+              {/* Ders Görseli */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-semibold text-black/50">Ders Görseli</label>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-10 rounded-xl bg-white/40 border-2 border-dashed border-black/15 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                    {classEditImagePreview
+                      ? <img src={classEditImagePreview} alt="" className="w-full h-full object-cover" />
+                      : <span className="text-lg opacity-25">🖼</span>
+                    }
+                  </div>
+                  <div>
+                    <label className="cursor-pointer text-sm font-semibold" style={{ color: themeColor }}>
+                      <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={handleClassEditImageSelect} />
+                      {classEditImagePreview ? 'Görseli Değiştir' : 'Görsel Yükle'}
+                    </label>
+                    <p className="text-xs text-black/30 mt-0.5">PNG, JPG veya WEBP · 5 MB · Önerilen: 16:9</p>
+                  </div>
+                </div>
+              </div>
+
+              {classEditError && <p className="text-sm text-red-500/80 font-medium">{classEditError}</p>}
+
+              <div className="flex gap-3 mt-2">
+                <button type="button" onClick={closeEditClass}
+                  className="flex-1 py-3 rounded-xl border border-black/10 bg-black/5 hover:bg-black/10 font-semibold text-sm transition">
+                  İptal
+                </button>
+                <button type="submit" disabled={classEditSubmitting} style={{ backgroundColor: themeColor }}
+                  className="flex-1 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 disabled:opacity-60 transition">
+                  {classEditSubmitting ? 'Kaydediliyor...' : 'Güncelle'}
                 </button>
               </div>
             </form>

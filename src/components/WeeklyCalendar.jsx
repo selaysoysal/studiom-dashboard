@@ -39,7 +39,7 @@ function formatWeekLabel(offset) {
 
 const DAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
-export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAttendance }) {
+export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAttendance, onEditClass }) {
   const [offset, setOffset] = useState(0);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -183,6 +183,14 @@ export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAtt
                               >
                                 Yoklama
                               </button>
+                              {onEditClass && (
+                                <button
+                                  onClick={() => onEditClass(cls)}
+                                  className="px-2 py-1 rounded-lg text-[10px] font-bold bg-white/70 border border-white/80 hover:bg-white transition"
+                                >
+                                  ✏
+                                </button>
+                              )}
                             </div>
                             </div>
                           </div>
