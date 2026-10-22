@@ -4,6 +4,7 @@ import WeeklyCalendar from './components/WeeklyCalendar';
 import StudioSettings from './components/StudioSettings';
 import MemberDetailDrawer from './components/MemberDetailDrawer';
 import BulkImportModal from './components/BulkImportModal';
+import InstructorsTab from './components/InstructorsTab';
 
 const glassStyle = "bg-white/25 backdrop-blur-xl border border-white/40 shadow-sm rounded-3xl";
 const QR_PREFIX  = 'STUDIOM-';
@@ -16,7 +17,7 @@ const WEEK_DAYS = [
 ];
 
 const EMPTY_FORM = {
-  title: '', instructorName: '', startTime: '', endTime: '',
+  title: '', instructorName: '', instructorId: '', startTime: '', endTime: '',
   maxCapacity: 15, isRecurring: false, selectedDays: [], endDate: '',
 };
 const EMPTY_MEMBER_FORM = {
@@ -70,7 +71,8 @@ function buildRecurringSessions(formData, studioId) {
       const s = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), hours, minutes);
       sessions.push({
         studio_id: studioId, title: formData.title.trim(),
-        instructor_name: formData.instructorName.trim(),
+        instructor_name: formData.instructorName.trim() || null,
+        instructor_id:   formData.instructorId || null,
         start_time: s.toISOString(),
         end_time: new Date(s.getTime() + durationMs).toISOString(),
         max_capacity: Number(formData.maxCapacity), current_capacity: 0,
@@ -143,6 +145,11 @@ export default function App() {
   const [editFormError,    setEditFormError]    = useState('');
   const [isEditSubmitting, setIsEditSubmitting] = useState(false);
 
+  // Instructors
+  const [instructors,       setInstructors]       = useState([]);
+  const [classImageFile,    setClassImageFile]    = useState(null);
+  const [classImagePreview, setClassImagePreview] = useState(null);
+
   // Bulk import
   const [showBulkImport, setShowBulkImport] = useState(false);
 
@@ -197,17 +204,25 @@ export default function App() {
       fetchMembershipTypes();
       fetchExpiringMembers();
       fetchTodayCheckIns();
+      fetchInstructors();
     }
   }, [studioId]);
 
   useEffect(() => { if (activeTab === 'members' && studioId) fetchMembers(); }, [activeTab, studioId]);
 
   // ── Data Fetching ───────────────────────────────────────
+  async function fetchInstructors() {
+    const { data } = await supabase
+      .from('instructors').select('id, full_name, profile_image_url, is_active')
+      .eq('studio_id', studioId).eq('is_active', true).order('full_name');
+    setInstructors(data ?? []);
+  }
+
   async function fetchClasses() {
     setLoading(true); setError(null);
     const { data, error } = await supabase
       .from('classes')
-      .select('id, start_time, end_time, title, instructor_name, current_capacity, max_capacity')
+      .select('id, start_time, end_time, title, instructor_name, instructor_id, image_url, current_capacity, max_capacity, instructors(full_name, profile_image_url)')
       .eq('studio_id', studioId)
       .order('start_time', { ascending: true });
     if (error) setError(error.message); else setClasses(data ?? []);
@@ -389,7 +404,10 @@ export default function App() {
 
   // ── Class Modal ─────────────────────────────────────────
   function openModal()  { setIsModalOpen(true); }
-  function closeModal() { setIsModalOpen(false); setFormData(EMPTY_FORM); setFormError(''); }
+  function closeModal() {
+    setIsModalOpen(false); setFormData(EMPTY_FORM); setFormError('');
+    setClassImageFile(null); setClassImagePreview(null);
+  }
 
   function handleFormChange(e) {
     const { name, value } = e.target;
@@ -413,10 +431,33 @@ export default function App() {
     }));
   }
 
+  async function handleClassImageSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg','image/png','image/webp'].includes(file.type)) {
+      setFormError('Yalnızca JPG, PNG veya WEBP desteklenir.'); return;
+    }
+    if (file.size > 5 * 1024 * 1024) { setFormError('Görsel 5 MB limitini aşıyor.'); return; }
+    setFormError('');
+    setClassImageFile(file);
+    setClassImagePreview(URL.createObjectURL(file));
+    e.target.value = '';
+  }
+
+  async function uploadClassImage(classId) {
+    if (!classImageFile) return null;
+    const ext  = classImageFile.name.split('.').pop().toLowerCase();
+    const path = `classes/${studioId}/${classId}/cover_${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from('studio-assets').upload(path, classImageFile, { upsert: true });
+    if (error) return null;
+    const { data: { publicUrl } } = supabase.storage.from('studio-assets').getPublicUrl(path);
+    return publicUrl;
+  }
+
   async function handleAddClass(e) {
     e.preventDefault();
-    if (!formData.title.trim() || !formData.instructorName.trim() || !formData.startTime || !formData.endTime) {
-      setFormError('Lütfen tüm alanları doldurun.'); return;
+    if (!formData.title.trim() || !formData.startTime || !formData.endTime) {
+      setFormError('Lütfen zorunlu alanları doldurun.'); return;
     }
     if (new Date(formData.endTime) <= new Date(formData.startTime)) {
       setFormError('Bitiş saati başlangıçtan sonra olmalı.'); return;
@@ -426,23 +467,37 @@ export default function App() {
       if (!formData.endDate) { setFormError('Bitiş tarihini girin.'); return; }
     }
     setIsSubmitting(true); setFormError('');
-    let insertError = null;
+
     if (formData.isRecurring) {
       const sessions = buildRecurringSessions(formData, studioId);
       if (!sessions.length) { setFormError('Seçilen aralıkta uygun gün yok.'); setIsSubmitting(false); return; }
-      const { error } = await supabase.from('classes').insert(sessions);
-      insertError = error;
+      const { data: inserted, error } = await supabase.from('classes').insert(sessions).select('id');
+      if (error) { setFormError(error.message); setIsSubmitting(false); return; }
+      if (classImageFile && inserted?.length) {
+        const imageUrl = await uploadClassImage(inserted[0].id);
+        if (imageUrl) {
+          const ids = inserted.map(r => r.id);
+          await supabase.from('classes').update({ image_url: imageUrl }).in('id', ids);
+        }
+      }
     } else {
-      const { error } = await supabase.from('classes').insert({
-        studio_id: studioId, title: formData.title.trim(),
-        instructor_name: formData.instructorName.trim(),
-        start_time: formData.startTime, end_time: formData.endTime,
-        max_capacity: Number(formData.maxCapacity), current_capacity: 0,
-      });
-      insertError = error;
+      const { data: inserted, error } = await supabase.from('classes').insert({
+        studio_id:       studioId,
+        title:           formData.title.trim(),
+        instructor_name: formData.instructorName.trim() || null,
+        instructor_id:   formData.instructorId           || null,
+        start_time:      formData.startTime,
+        end_time:        formData.endTime,
+        max_capacity:    Number(formData.maxCapacity),
+        current_capacity: 0,
+      }).select('id').single();
+      if (error) { setFormError(error.message); setIsSubmitting(false); return; }
+      if (classImageFile && inserted?.id) {
+        const imageUrl = await uploadClassImage(inserted.id);
+        if (imageUrl) await supabase.from('classes').update({ image_url: imageUrl }).eq('id', inserted.id);
+      }
     }
     setIsSubmitting(false);
-    if (insertError) { setFormError(insertError.message); return; }
     closeModal(); fetchClasses();
   }
 
@@ -651,11 +706,13 @@ export default function App() {
         </div>
         <nav className="flex flex-col gap-1.5 flex-1">
           {[
-            { key: 'overview',  label: 'Genel Bakış'      },
-            { key: 'schedule',  label: 'Ders Programı'    },
-            { key: 'members',   label: 'Üye Yönetimi'     },
-            { key: 'packages',  label: 'Üyelik Paketleri' },
-            { key: 'settings',  label: 'Stüdyo Ayarları'  },
+            { key: 'overview',     label: 'Genel Bakış'      },
+            { key: 'schedule',     label: 'Ders Programı'    },
+            { key: 'members',      label: 'Üye Yönetimi'     },
+            { key: 'instructors',  label: 'Eğitmenler'       },
+            { key: 'packages',     label: 'Üyelik Paketleri' },
+            { key: 'messages',     label: 'Mesajlar'         },
+            { key: 'settings',     label: 'Stüdyo Ayarları'  },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setActiveTab(key)} style={navStyle(key)} className={navClass(key)}>
               {label}
@@ -738,7 +795,17 @@ export default function App() {
                             {formatTime(cls.start_time)}{cls.end_time ? ` – ${formatTime(cls.end_time)}` : ''}
                           </td>
                           <td className="py-3.5 font-semibold text-sm">{cls.title}</td>
-                          <td className="py-3.5 text-black/70 text-sm">{cls.instructor_name}</td>
+                          <td className="py-3.5 text-black/70 text-sm">
+                            <div className="flex items-center gap-2">
+                              {cls.instructors?.profile_image_url
+                                ? <img src={cls.instructors.profile_image_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                : cls.image_url
+                                  ? <img src={cls.image_url} alt="" className="w-6 h-6 rounded-lg object-cover flex-shrink-0 opacity-60" />
+                                  : null
+                              }
+                              {cls.instructors?.full_name || cls.instructor_name || '—'}
+                            </div>
+                          </td>
                           <td className="py-3.5">
                             <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${isFull ? 'bg-amber-400/25 text-amber-700' : 'bg-emerald-400/25 text-emerald-700'}`}>
                               {cls.current_capacity}/{cls.max_capacity}
@@ -823,6 +890,25 @@ export default function App() {
             onAddClass={openModal}
             onAttendance={openAttendance}
           />
+        )}
+
+        {/* ══ EĞİTMENLER ══ */}
+        {activeTab === 'instructors' && (
+          <InstructorsTab studioId={studioId} themeColor={themeColor} showToast={showToast} />
+        )}
+
+        {/* ══ MESAJLAR ══ */}
+        {activeTab === 'messages' && (
+          <div className="flex flex-col gap-5">
+            <header className="mt-2">
+              <h1 className="text-3xl font-bold">Mesajlar</h1>
+              <p className="text-black/60 mt-1 font-medium">Üyelerinizle iletişim kurun.</p>
+            </header>
+            <div className={`${glassStyle} p-16 flex flex-col items-center gap-4`}>
+              <span className="text-5xl opacity-20">💬</span>
+              <p className="font-semibold text-black/40">Mesajlaşma özelliği çok yakında geliyor.</p>
+            </div>
+          </div>
         )}
 
         {/* ══ ÜYE YÖNETİMİ ══ */}
@@ -1028,8 +1114,41 @@ export default function App() {
                 <input type="text" name="title" value={formData.title} onChange={handleFormChange} placeholder="Reformer Pilates" className={inputClass} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-semibold text-black/50">Eğitmen Adı</label>
-                <input type="text" name="instructorName" value={formData.instructorName} onChange={handleFormChange} placeholder="Selay Yılmaz" className={inputClass} />
+                <label className="text-sm font-semibold text-black/50">Eğitmen</label>
+                {instructors.length > 0 ? (
+                  <select name="instructorId" value={formData.instructorId} onChange={handleFormChange} className={inputClass}>
+                    <option value="">— Eğitmen seçin (opsiyonel) —</option>
+                    {instructors.map(i => <option key={i.id} value={i.id}>{i.full_name}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" name="instructorName" value={formData.instructorName} onChange={handleFormChange} placeholder="Selay Yılmaz" className={inputClass} />
+                )}
+                {instructors.length > 0 && (
+                  <button type="button" onClick={() => setActiveTab('instructors')}
+                    style={{ color: themeColor }} className="text-xs font-semibold text-left hover:opacity-70 transition">
+                    + Eğitmenler sayfasından yeni eğitmen ekle
+                  </button>
+                )}
+              </div>
+
+              {/* Ders Görseli */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-semibold text-black/50">Ders Görseli</label>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-10 rounded-xl bg-white/40 border-2 border-dashed border-black/15 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                    {classImagePreview
+                      ? <img src={classImagePreview} alt="" className="w-full h-full object-cover" />
+                      : <span className="text-lg opacity-25">🖼</span>
+                    }
+                  </div>
+                  <div>
+                    <label className="cursor-pointer text-sm font-semibold" style={{ color: themeColor }}>
+                      <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={handleClassImageSelect} />
+                      {classImagePreview ? 'Görseli Değiştir' : 'Görsel Yükle'}
+                    </label>
+                    <p className="text-xs text-black/30 mt-0.5">PNG, JPG veya WEBP · 5 MB · Önerilen: 16:9</p>
+                  </div>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">

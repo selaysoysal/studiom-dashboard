@@ -54,7 +54,7 @@ export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAtt
     const { start, end } = getWeekRange(offset);
     const { data } = await supabase
       .from('classes')
-      .select('id, title, instructor_name, start_time, end_time, max_capacity, current_capacity')
+      .select('id, title, instructor_name, instructor_id, image_url, start_time, end_time, max_capacity, current_capacity, instructors(full_name, profile_image_url)')
       .eq('studio_id', studioId)
       .gte('start_time', start.toISOString())
       .lte('start_time', end.toISOString())
@@ -144,15 +144,26 @@ export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAtt
                         return (
                           <div
                             key={cls.id}
-                            className="bg-white/60 border border-white/70 rounded-2xl p-3 flex flex-col gap-1.5"
+                            className="bg-white/60 border border-white/70 rounded-2xl overflow-hidden flex flex-col gap-0"
                             style={{ opacity: past ? 0.55 : 1 }}
                           >
+                            {cls.image_url && (
+                              <img src={cls.image_url} alt={cls.title} className="w-full h-10 object-cover" />
+                            )}
+                            <div className="p-3 flex flex-col gap-1.5">
                             <p className="text-[11px] font-bold text-black/50">
                               {formatHHMM(cls.start_time)}
                               {cls.end_time && ` – ${formatHHMM(cls.end_time)}`}
                             </p>
                             <p className="text-xs font-bold leading-tight">{cls.title}</p>
-                            <p className="text-[11px] text-black/50 leading-tight">{cls.instructor_name}</p>
+                            <div className="flex items-center gap-1.5">
+                              {cls.instructors?.profile_image_url && (
+                                <img src={cls.instructors.profile_image_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                              )}
+                              <p className="text-[11px] text-black/50 leading-tight truncate">
+                                {cls.instructors?.full_name || cls.instructor_name || ''}
+                              </p>
+                            </div>
                             <div className="flex items-center justify-between mt-0.5">
                               <span
                                 className="text-[10px] font-bold px-2 py-0.5 rounded-full"
@@ -172,6 +183,7 @@ export default function WeeklyCalendar({ studioId, themeColor, onAddClass, onAtt
                               >
                                 Yoklama
                               </button>
+                            </div>
                             </div>
                           </div>
                         );
