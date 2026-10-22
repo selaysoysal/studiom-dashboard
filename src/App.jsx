@@ -6,6 +6,7 @@ import MemberDetailDrawer from './components/MemberDetailDrawer';
 import BulkImportModal from './components/BulkImportModal';
 import InstructorsTab from './components/InstructorsTab';
 import InstructorSelect from './components/InstructorSelect';
+import QuickAddInstructorModal from './components/QuickAddInstructorModal';
 
 const glassStyle = "bg-white/25 backdrop-blur-xl border border-white/40 shadow-sm rounded-3xl";
 const QR_PREFIX  = 'STUDIOM-';
@@ -148,6 +149,9 @@ export default function App() {
 
   // Instructors
   const [instructors,       setInstructors]       = useState([]);
+  const [showQuickAdd,      setShowQuickAdd]      = useState(false);
+  const quickAddCallback = useRef(null);           // (instructorId: string) => void
+
   const [classImageFile,    setClassImageFile]    = useState(null);
   const [classImagePreview, setClassImagePreview] = useState(null);
 
@@ -222,9 +226,21 @@ export default function App() {
   // ── Data Fetching ───────────────────────────────────────
   async function fetchInstructors() {
     const { data } = await supabase
-      .from('instructors').select('id, full_name, profile_image_url, is_active')
+      .from('instructors').select('id, full_name, phone, email, profile_image_url, is_active')
       .eq('studio_id', studioId).eq('is_active', true).order('full_name');
     setInstructors(data ?? []);
+  }
+
+  function openQuickAdd(callback) {
+    quickAddCallback.current = callback;
+    setShowQuickAdd(true);
+  }
+
+  async function handleQuickInstructorCreated(instructor) {
+    setShowQuickAdd(false);
+    await fetchInstructors();
+    quickAddCallback.current?.(instructor.id);
+    quickAddCallback.current = null;
   }
 
   async function fetchClasses() {
@@ -1208,13 +1224,25 @@ export default function App() {
                 <label className="text-sm font-semibold text-black/50">
                   Eğitmen{instructors.length > 0 ? ' *' : ''}
                 </label>
-                <InstructorSelect
-                  instructors={instructors}
-                  value={formData.instructorId}
-                  onChange={id => setFormData(f => ({ ...f, instructorId: id }))}
-                  themeColor={themeColor}
-                  onAddInstructor={() => { closeModal(); setActiveTab('instructors'); }}
-                />
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <InstructorSelect
+                      instructors={instructors}
+                      value={formData.instructorId}
+                      onChange={id => setFormData(f => ({ ...f, instructorId: id }))}
+                      themeColor={themeColor}
+                      onAddInstructor={() => openQuickAdd(id => setFormData(f => ({ ...f, instructorId: id })))}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openQuickAdd(id => setFormData(f => ({ ...f, instructorId: id })))}
+                    style={{ color: themeColor }}
+                    className="flex-shrink-0 px-3 py-3 rounded-xl text-sm font-semibold bg-white/40 border border-black/10 hover:bg-white/60 transition whitespace-nowrap"
+                  >
+                    + Yeni Eğitmen
+                  </button>
+                </div>
               </div>
 
               {/* Ders Görseli */}
@@ -1316,14 +1344,25 @@ export default function App() {
                 <label className="text-sm font-semibold text-black/50">
                   Eğitmen{instructors.length > 0 ? ' *' : ''}
                 </label>
-                <InstructorSelect
-                  instructors={instructors}
-                  value={classEditForm.instructorId ?? ''}
-                  onChange={id => setClassEditForm(f => ({ ...f, instructorId: id }))}
-                  themeColor={themeColor}
-                  onAddInstructor={() => { closeEditClass(); setActiveTab('instructors'); }}
-                />
-                {/* Legacy fallback: show old instructor_name if no instructor_id was set */}
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <InstructorSelect
+                      instructors={instructors}
+                      value={classEditForm.instructorId ?? ''}
+                      onChange={id => setClassEditForm(f => ({ ...f, instructorId: id }))}
+                      themeColor={themeColor}
+                      onAddInstructor={() => openQuickAdd(id => setClassEditForm(f => ({ ...f, instructorId: id })))}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openQuickAdd(id => setClassEditForm(f => ({ ...f, instructorId: id })))}
+                    style={{ color: themeColor }}
+                    className="flex-shrink-0 px-3 py-3 rounded-xl text-sm font-semibold bg-white/40 border border-black/10 hover:bg-white/60 transition whitespace-nowrap"
+                  >
+                    + Yeni Eğitmen
+                  </button>
+                </div>
                 {!classEditForm.instructorId && editingClass.instructor_name && (
                   <p className="text-xs text-black/40">Mevcut kayıt: {editingClass.instructor_name}</p>
                 )}
@@ -1669,6 +1708,16 @@ export default function App() {
           themeColor={themeColor}
           onClose={() => setShowBulkImport(false)}
           onImportComplete={() => { fetchMembers(); fetchTotalMembers(); fetchExpiringMembers(); }}
+        />
+      )}
+
+      {showQuickAdd && (
+        <QuickAddInstructorModal
+          studioId={studioId}
+          themeColor={themeColor}
+          existingInstructors={instructors}
+          onClose={() => setShowQuickAdd(false)}
+          onCreated={handleQuickInstructorCreated}
         />
       )}
 
